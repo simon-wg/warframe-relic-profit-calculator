@@ -308,6 +308,8 @@ def calculate_relic_values(live: bool = False):
     print("------------------------")
     for relic in sorted_relics[0:25]:
         print(f"{relic[0]}: {relic[1]['value']:.2f}p")
+    with open("sorted_relics.json", "w") as file:
+        file.write(json.dumps(sorted_relics))
 
     value_divided_by_price = []
     for relic in sorted_relics:
@@ -319,6 +321,54 @@ def calculate_relic_values(live: bool = False):
     print("------------------------")
     for relic in value_divided_by_price[0:25]:
         print(f"{relic[0]}: {relic[1]:.2f}")
+    with open("profit_relics.json", "w") as file:
+        file.write(json.dumps(value_divided_by_price))
+    # TODO Add a list of most plat gained by refining past intact
+
+
+def open_menu():
+    with open("sorted_relics.json", "r") as file:
+        sorted_relics = json.loads(file.read())
+    with open("profit_relics.json", "r") as file:
+        profit_relics = json.loads(file.read())
+
+    def handle_mode_input() -> str:
+        mode = input("Select mode:\n1. Value\n2. Profit\nq. Quit\nEnter mode: ").strip()
+        if mode == "1":
+            return "value"
+        elif mode == "2":
+            return "profit"
+        elif mode == "q":
+            return "quit"
+        else:
+            return handle_mode_input()
+
+    def handle_relic_input() -> str:
+        relic = input("Enter relic: ")
+        if relic.lower() in [x[0].lower() for x in sorted_relics]:
+            return relic
+        elif relic == "q":
+            return "quit"
+        else:
+            return handle_relic_input()
+
+    mode = ""
+    while mode != "quit":
+        mode = handle_mode_input()
+        relic = handle_relic_input()
+        if relic == "quit":
+            mode = "quit"
+            break
+        if mode == "value":
+            for relic_data in sorted_relics:
+                if relic.lower() == relic_data[0].lower():
+                    print(f"{relic_data[0]}: {relic_data[1]['value']:.2f}p")
+                    break
+        elif mode == "profit":
+            for relic_data in profit_relics:
+                if relic.lower() == relic_data[0].lower():
+                    print(f"{relic_data[0]}: {relic_data[1]:.2f}")
+                    break
 
 
 async def main(pool_size: int):
@@ -337,6 +387,7 @@ async def main(pool_size: int):
         await get_all_info(client, sem, "statistics", needs_update)
         await get_all_info(client, sem, "orders", needs_update)
     calculate_relic_values()
+    open_menu()
 
 
 if __name__ == "__main__":
