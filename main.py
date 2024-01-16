@@ -4,7 +4,7 @@ import httpx
 
 from tqdm import tqdm
 from tqdm.asyncio import tqdm as tqdm_asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 import asyncio
 
@@ -145,7 +145,10 @@ def get_items(needs_update=False) -> bool:
                     items[reward["itemName"]] = {
                         "rarity": reward["rarity"],
                         "chance": reward["chance"],
-                        "urlName": reward["itemName"].replace(" ", "_").lower().replace("&", "and"),
+                        "urlName": reward["itemName"]
+                        .replace(" ", "_")
+                        .lower()
+                        .replace("&", "and"),
                         "itemName": reward["itemName"],
                     }
         with open("items.json", "w") as file:
@@ -156,8 +159,8 @@ def get_items(needs_update=False) -> bool:
             items = json.loads(file.read())
 
 
-async def get_orders(
-    client: httpx.AsyncClient, item: str, item_url: str
+async def get_info(
+    client: httpx.AsyncClient, item: str, item_url: str, item_api_uri: str
 ) -> Dict[str, Any]:
     """Get all orders for an item
 
@@ -186,29 +189,33 @@ async def get_orders(
             "subtype": "intact"}]
     }]
     """
-    url = f"{MARKET_API_ENDPOINT}/items/{item_url}/orders"
+    url = f"{MARKET_API_ENDPOINT}/items/{item_url}/{item_api_uri}"
     response = await client.get(url)
     if response.status_code == 429:
         await asyncio.sleep(1)
-        return await get_orders(client, item, item_url)
+        return await get_info(client, item, item_url, item_api_uri)
     elif response.status_code != 200:
         print(f"Error on {item}")
         return {}
-    orders = response.json()
-    return {item: orders["payload"]["orders"]}
+    info = response.json()
+    return {item: info["payload"]}
 
 
-sem = asyncio.Semaphore(20)
+SEM = asyncio.Semaphore(20)
 
 
-async def safe_get_orders(client: httpx.AsyncClient, item: str, item_url: str):
-    async with sem:
-        return await get_orders(client, item, item_url)
+async def safe_get_info(
+    client: httpx.AsyncClient, item: str, item_url: str, item_api_uri: str
+):
+    async with SEM:
+        return await get_info(client, item, item_url, item_api_uri)
 
 
-async def get_all_orders(client: httpx.AsyncClient, needs_update=False) -> bool:
+async def get_all_info(
+    client: httpx.AsyncClient, item_api_uri: str, needs_update=False
+) -> bool:
     try:
-        with open("orders.json", "r") as file:
+        with open(f"{item_api_uri}.json", "r") as file:
             text = file.read()
             if text == "":
                 needs_update = True
@@ -228,32 +235,59 @@ async def get_all_orders(client: httpx.AsyncClient, needs_update=False) -> bool:
 
     for relic in relics.items():
         if "Intact" in relic[0]:
-            tasks.append(safe_get_orders(client, relic[0], relic[1]["urlName"]))
+            tasks.append(
+                safe_get_info(client, relic[0], relic[1]["urlName"], item_api_uri)
+            )
     for item in items.items():
-        tasks.append(safe_get_orders(client, item[0], item[1]["urlName"]))
+        tasks.append(safe_get_info(client, item[0], item[1]["urlName"], item_api_uri))
 
-    results = await tqdm_asyncio.gather(*tasks, desc="Getting Orders...")
-    with open("orders.json", "w") as file:
+    results = await tqdm_asyncio.gather(
+        *tasks, desc=f"Getting {item_api_uri.capitalize()}..."
+    )
+    with open(f"{item_api_uri}.json", "w") as file:
         file.write(json.dumps(results))
 
 
-def calculate_relic_values(needs_update):
+def calculate_relic_values(needs_update, live: bool = False):
     with open("orders.json", "r") as file:
         orders = json.loads(file.read())
+
+    with open("statistics.json", "r") as file:
+        statistics = json.loads(file.read())
 
     order_dict = {}
     for order in orders:
         order_dict.update(order)
+
+    statistics_dict = {}
+    for statistic in statistics:
+        statistics_dict.update(statistic)
     median_plat = {}
-    for item, orders in order_dict.items():
-        if item not in median_plat:
+    # This method looks at all live orders for an item and gets the median price for that item based on all current orders
+    if live:
+        for item, orders in tqdm(order_dict.items(), desc="Calculating Median Plat..."):
             median_plat[item] = 0
-        all_plat = []
-        for order in orders:
-            if order["order_type"] == "sell":
-                all_plat.append(order["platinum"])
-        all_plat.sort()
-        median_plat[item] = all_plat[len(all_plat) // 2]
+            all_plat = []
+            for order in orders["orders"]:
+                if order["order_type"] == "sell":
+                    all_plat.append(order["platinum"])
+            all_plat.sort()
+            median_plat[item] = all_plat[len(all_plat) // 2]
+
+    # Statistics based version of calculating median plat looking at the average of the median for the last week (7 days)
+    else:
+        for item in tqdm(
+            statistics_dict, desc="Calculating Median Plat (Statistics)..."
+        ):
+            median_plat[item] = 0
+            all_medians = []
+            item_statistics = statistics_dict[item]["statistics_closed"]["90days"]
+            item_statistics.sort(key=lambda x: x["datetime"])
+            all_medians = [x["median"] for x in item_statistics[0:7]]
+            try:
+                median_plat[item] = round(sum(all_medians) / len(all_medians), 2)
+            except ZeroDivisionError:
+                median_plat[item] = float("inf")
 
     with open("relics.json", "r") as file:
         relics = json.loads(file.read())
@@ -288,12 +322,14 @@ def calculate_relic_values(needs_update):
 
 async def main():
     """Main function"""
-    needs_update = check_update()
+    # needs_update = check_update()
+    needs_update = False
     get_relics(needs_update)
     get_items(needs_update)
     async with httpx.AsyncClient() as client:
-        await get_all_orders(client, needs_update)
-    calculate_relic_values(needs_update=True)
+        await get_all_info(client, "statistics", needs_update)
+        await get_all_info(client, "orders", needs_update)
+    calculate_relic_values(needs_update)
 
 
 if __name__ == "__main__":
