@@ -3,7 +3,8 @@ import json
 import httpx
 
 from tqdm import tqdm
-from typing import Dict, Any
+from tqdm.asyncio import tqdm as tqdm_asyncio
+from typing import Dict, Any, List
 
 import asyncio
 
@@ -86,7 +87,7 @@ def get_relics(needs_update=False) -> bool:
             response = client.get(url)
             relic_json = response.json()
             relics = {}
-            for relic in tqdm(relic_json.get("relics")):
+            for relic in tqdm(relic_json.get("relics"), desc="Parsing Relics..."):
                 relic_name = (
                     f"{relic.get('tier')} {relic.get('relicName')} {relic.get('state')}"
                 )
@@ -138,13 +139,13 @@ def get_items(needs_update=False) -> bool:
     if needs_update:
         items = {}
         relics = relics.get("relics")
-        for relic in relics:
+        for relic in tqdm(relics, desc="Parsing Items from Relics..."):
             for reward in relics[relic]["rewards"]:
                 if reward["itemName"] not in items.keys():
                     items[reward["itemName"]] = {
                         "rarity": reward["rarity"],
                         "chance": reward["chance"],
-                        "urlName": reward["itemName"].replace(" ", "_").lower(),
+                        "urlName": reward["itemName"].replace(" ", "_").lower().replace("&", "and"),
                         "itemName": reward["itemName"],
                     }
         with open("items.json", "w") as file:
@@ -186,11 +187,9 @@ async def get_orders(
     }]
     """
     url = f"{MARKET_API_ENDPOINT}/items/{item_url}/orders"
-    await asyncio.sleep(1)
     response = await client.get(url)
     if response.status_code == 429:
-        print(f"Rate limited on {item}")
-        await asyncio.sleep(3)
+        await asyncio.sleep(1)
         return await get_orders(client, item, item_url)
     elif response.status_code != 200:
         print(f"Error on {item}")
@@ -199,7 +198,7 @@ async def get_orders(
     return {item: orders["payload"]["orders"]}
 
 
-sem = asyncio.Semaphore(10)
+sem = asyncio.Semaphore(20)
 
 
 async def safe_get_orders(client: httpx.AsyncClient, item: str, item_url: str):
@@ -208,10 +207,13 @@ async def safe_get_orders(client: httpx.AsyncClient, item: str, item_url: str):
 
 
 async def get_all_orders(client: httpx.AsyncClient, needs_update=False) -> bool:
-    with open("orders.json", "r") as file:
-        text = file.read()
-        if text == "":
-            needs_update = True
+    try:
+        with open("orders.json", "r") as file:
+            text = file.read()
+            if text == "":
+                needs_update = True
+    except FileNotFoundError:
+        needs_update = True
     if not needs_update:
         return
 
@@ -228,9 +230,9 @@ async def get_all_orders(client: httpx.AsyncClient, needs_update=False) -> bool:
         if "Intact" in relic[0]:
             tasks.append(safe_get_orders(client, relic[0], relic[1]["urlName"]))
     for item in items.items():
-        tasks.append((safe_get_orders(client, item[0], item[1]["urlName"])))
+        tasks.append(safe_get_orders(client, item[0], item[1]["urlName"]))
 
-    results = await asyncio.gather(*tasks)
+    results = await tqdm_asyncio.gather(*tasks, desc="Getting Orders...")
     with open("orders.json", "w") as file:
         file.write(json.dumps(results))
 
