@@ -1,10 +1,9 @@
 import time
 import json
 import httpx
-from tqdm import tqdm
-from typing import Dict, Any, Optional, Tuple
-import requests
 
+from tqdm import tqdm
+from typing import Dict, Any
 
 import asyncio
 
