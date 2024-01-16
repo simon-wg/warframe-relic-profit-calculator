@@ -201,19 +201,19 @@ async def get_info(
     return {item: info["payload"]}
 
 
-SEM = asyncio.Semaphore(20)
-
-
-async def safe_get_info(
-    client: httpx.AsyncClient, item: str, item_url: str, item_api_uri: str
-):
-    async with SEM:
-        return await get_info(client, item, item_url, item_api_uri)
-
-
 async def get_all_info(
-    client: httpx.AsyncClient, item_api_uri: str, needs_update=False
+    client: httpx.AsyncClient,
+    sem: asyncio.Semaphore,
+    item_api_uri: str,
+    needs_update=False,
 ) -> bool:
+    # Helper function to make sure we don't make too many requests at once
+    async def safe_get_info(
+        client: httpx.AsyncClient, item: str, item_url: str, item_api_uri: str
+    ):
+        async with sem:
+            return await get_info(client, item, item_url, item_api_uri)
+
     try:
         with open(f"{item_api_uri}.json", "r") as file:
             text = file.read()
@@ -248,7 +248,7 @@ async def get_all_info(
         file.write(json.dumps(results))
 
 
-def calculate_relic_values(needs_update, live: bool = False):
+def calculate_relic_values(live: bool = False):
     with open("orders.json", "r") as file:
         orders = json.loads(file.read())
 
@@ -263,6 +263,7 @@ def calculate_relic_values(needs_update, live: bool = False):
     for statistic in statistics:
         statistics_dict.update(statistic)
     median_plat = {}
+
     # This method looks at all live orders for an item and gets the median price for that item based on all current orders
     if live:
         for item, orders in tqdm(order_dict.items(), desc="Calculating Median Plat..."):
@@ -320,17 +321,24 @@ def calculate_relic_values(needs_update, live: bool = False):
         print(f"{relic[0]}: {relic[1]:.2f}")
 
 
-async def main():
+async def main(pool_size: int):
     """Main function"""
-    # needs_update = check_update()
-    needs_update = False
+
+    sem = asyncio.Semaphore(pool_size)
+
+    needs_update = check_update()
+    if needs_update:
+        print("Updating Relics...")
+    else:
+        print("Relics are up to date! (<24 hours old)")
     get_relics(needs_update)
     get_items(needs_update)
     async with httpx.AsyncClient() as client:
-        await get_all_info(client, "statistics", needs_update)
-        await get_all_info(client, "orders", needs_update)
-    calculate_relic_values(needs_update)
+        await get_all_info(client, sem, "statistics", needs_update)
+        await get_all_info(client, sem, "orders", needs_update)
+    calculate_relic_values()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    POOL_SIZE = 10
+    asyncio.run(main(POOL_SIZE))
