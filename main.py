@@ -344,8 +344,10 @@ def open_menu():
             return handle_mode_input()
 
     def handle_relic_input() -> str:
-        relic = input("Enter relic: ")
-        if relic.lower() in [x[0].lower() for x in sorted_relics]:
+        relic = input("Enter relic (enter list for 25 best): ")
+        if relic.lower() == "list":
+            return "list"
+        elif relic.lower() in [x[0].lower() for x in sorted_relics]:
             return relic
         elif relic == "q":
             return "quit"
@@ -355,17 +357,27 @@ def open_menu():
     mode = ""
     while mode != "quit":
         mode = handle_mode_input()
+        if mode == "quit":
+            break
         relic = handle_relic_input()
         if relic == "quit":
             mode = "quit"
             break
         if mode == "value":
             for relic_data in sorted_relics:
+                if relic == "list":
+                    for relic_data in sorted_relics[0:25]:
+                        print(f"{relic_data[0]}: {relic_data[1]['value']:.2f}p")
+                    break
                 if relic.lower() == relic_data[0].lower():
                     print(f"{relic_data[0]}: {relic_data[1]['value']:.2f}p")
                     break
         elif mode == "profit":
             for relic_data in profit_relics:
+                if relic == "list":
+                    for relic_data in profit_relics[0:25]:
+                        print(f"{relic_data[0]}: {relic_data[1]:.2f}")
+                    break
                 if relic.lower() == relic_data[0].lower():
                     print(f"{relic_data[0]}: {relic_data[1]:.2f}")
                     break
@@ -387,6 +399,7 @@ async def main(pool_size: int):
         await get_all_info(client, sem, "statistics", needs_update)
         await get_all_info(client, sem, "orders", needs_update)
     calculate_relic_values()
+    
     open_menu()
 
 
